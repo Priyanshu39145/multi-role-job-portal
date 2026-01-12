@@ -1,0 +1,26 @@
+Swagger is used for documentation of APIs ----
+Maybe we wanna show an external person how our API works? ----
+Swagger helps us to show the workflow of our APIs in a good UI ---
+
+OpenAPI Specification ---- It defines a standardized format for describing APIs comprehensively
+
+Swagger is an open-source framework used for designing, building, documenting, and consuming RESTful APls. It provides a standardized way to describe the structure of an API, making it easier for developers to understand, integrate, and consume the API.
+
+Springfox is a Java library used to integrate Swagger with Spring Boot applications. It automatically generates Swagger documentation from your Spring controllers and models.
+springfox-boot-starter: A starter dependency to quickly set up and integrate Springfox into a Spring Boot project.
+
+Springdoc OpenAPI is an alternative to Springfox. It is designed to generate API documentation from Spring Boot applications using the OpenAPI 3 specification, which is the latest iteration of the Swagger specification.
+springdoc-openapi-ui: A module that integrates Spring Boot applications with Swagger Ul using the OpenAPI 3 specification.
+
+
+First downgrade our application to 3.4.1 ----
+Then add this in pom.xml ----
+		<dependency>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+			<version>2.8.0</version>
+		</dependency>
+
+		Then if we hit ---- http://localhost:8080/swagger-ui/index.html ---- then we get the swagger UI for all our endpoints ----
+
+		Now to show our endpoints we have to add many things to our controller methods ---- See RegisterController ----

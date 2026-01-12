@@ -1,0 +1,34 @@
+We are making a MultiRole Job Portal ---
+
+GPT says this
+
+You started the Multi-Role Job Portal Backend by first laying a strong domain foundation, instead of jumping into APIs. You designed the core User entity with proper attributes like email, password, role, enabled, and createdAt. This immediately established identity, authorization potential, and lifecycle control (via enabled). You also introduced a RoleType enum to strictly control system roles (ADMIN, RECRUITER, CANDIDATE), preventing role spoofing and hard-coded strings. Along with this, you created a UserRepository to handle persistence and lookup by email, which became the backbone for both registration and login.
+
+Next, you designed a role-explicit registration flow, which is a very professional decision. Instead of a single generic /register endpoint, you created separate registration routes per role (candidate and recruiter), ensuring that roles are enforced at the API level rather than being user-supplied. In the service layer, you centralized user creation logic to avoid duplication, added checks for existing users, encoded passwords securely, set role-specific values, and controlled the enabled flag according to business logic. You also made the correct architectural decision to remove public admin registration, acknowledging that admins should only be created manually or by existing admins.
+
+After registration, you moved on to authentication (login), but intentionally did it without JWT first, which is the correct learning order. You implemented a login service that validates user existence, checks the encoded password using PasswordEncoder.matches(), verifies that the account is enabled, and returns a clean response DTO. This ensured that authentication logic was correct, testable, and independent of token logic. By separating credential validation from token generation, you kept the system modular and easier to reason about.
+
+You then integrated Spring Security and encountered real-world security behavior: 401 Unauthorized and 403 Forbidden. Instead of bypassing it blindly, you correctly configured a SecurityFilterChain, learned why configuration and bean registration are mandatory, understood why CSRF blocks POST requests from tools like Postman, and disabled CSRF appropriately for a stateless REST API. You explicitly allowed public endpoints like registration and login while leaving the rest protected, which is exactly how secure backends are structured.
+
+After this comes JWT Login ----
+We have to make various changes ----
+We first change the WebSecurityConfig --- disable csrf --- enable Stateless session management --- and then configure the requestmatchers ---
+Then we change the User Entity --- make it implement the UserDetails interface --- and override the methods
+Then we make a CustomUserDetailsService Method --- which has the loadByUsername method overridden
+Then we make the AuthController and AuthService --- with the login method ---
+Then we make the JWTAuthFilter --- see the class --- we add this filter with in the WebSecuityConfig
+How the login works --- First we get the LoginRequestDTO --- where we have email and password ---
+We delegate the login process to AuthenticationManager --- which uses our CustomUserDetailsService --- to fetch the user and authentication --- then we generate a JWT access token --- then return the LoginResponseDTO containing the token ---
+Using the token when we try to approach a route the JWTAuthFilter validates and then allows us ----
+
+
+Next we are making the CandidateProfile Entity --- see the Entity ---
+then we create the CandidateProfileController --- and then the corresponding methods inside the CandidateProfileService
+See the CandidateProfileService ---
+
+Next we are creating the RecruiterProfile Entity --- see the Entity ---
+Then we create the RecruiterProfileController --- and then the corresponding methods inside the RecruiterProfileService See the RecruiterProfileService
+
+Now comes the Job Entity --- see the Entity --- Controller and Service ---
+
+Now comes the JobApplication Entity -- see the Entity Controller and Service ---
