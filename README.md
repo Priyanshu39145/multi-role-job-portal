@@ -54,7 +54,7 @@ Each layer has a single responsibility, making the system:
 | Language | Java |
 | Framework | Spring Boot |
 | Security | Spring Security + JWT |
-| Database | MySQL / PostgreSQL |
+| Database | MySQL |
 | ORM | JPA (Hibernate) |
 | API Docs | Swagger (OpenAPI 3) |
 | Build Tool | Maven |
