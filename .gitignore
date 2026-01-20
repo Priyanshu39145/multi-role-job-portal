@@ -3,6 +3,8 @@ target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+Notes.txt
+SwaggerNotes.txt
 
 ### STS ###
 .apt_generated
@@ -31,3 +33,5 @@ build/
 
 ### VS Code ###
 .vscode/
+
+

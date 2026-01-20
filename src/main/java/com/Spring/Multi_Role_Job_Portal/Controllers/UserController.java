@@ -28,6 +28,6 @@ public class UserController {
 
     @GetMapping("/users")
     public ResponseEntity<List<UserDTO>> getAllUsers() {
-        ResponseEntity.status(HttpStatus.OK).body(userService.getAllUsers());
+        return ResponseEntity.status(HttpStatus.OK).body(userService.getAllUsers());
     }
 }

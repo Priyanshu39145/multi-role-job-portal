@@ -24,7 +24,7 @@ public class WebSecurityConfig {
         http.csrf(csrf -> csrf.disable())
                 //Enabling stateless session management --
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                //We are seeting some routes as public ----
+                //We are setting some routes as public ----
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/auth/**",
@@ -35,7 +35,7 @@ public class WebSecurityConfig {
                         ).permitAll()
                         //We get the get route of jobs as public too --- as anyone can see the jobs
                         .requestMatchers(HttpMethod.GET, "/jobs/**").permitAll()
-                        //Remember we had used ROLE_...... in SimoleGrantedAuthority in User entity ---
+                        //Remember we had used ROLE_...... in SimpleGrantedAuthority in User entity ---
                         //Spring will check from here --- the user ---
                         //All the routes of users are set to ADMIN only
                         .requestMatchers("/users").hasRole("ADMIN")
