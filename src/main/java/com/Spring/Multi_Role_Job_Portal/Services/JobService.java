@@ -43,7 +43,7 @@ public class JobService {
 
     public JobResponseDTO createJob(JobRequestDTO jobRequestDTO) throws AccessDeniedException {
         User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        //Job is only crreated by recruiter
+        //Job is only created by recruiter
         if(user==null || user.getRole()!= RoleType.RECRUITER)
             throw new AccessDeniedException("User is not valid to create a job");
 
