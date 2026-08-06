@@ -22,6 +22,7 @@ public class JobResponseDTO {
     private String location;
     private Integer experienceRequired;
     private Double expectedSalary;
+    private Double minMatchScore;
     private EmploymentType employmentType;
     private JobStatus status;
 }

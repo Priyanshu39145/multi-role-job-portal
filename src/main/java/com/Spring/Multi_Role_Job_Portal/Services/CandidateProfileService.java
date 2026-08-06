@@ -50,6 +50,8 @@ public class CandidateProfileService {
                 .resumeUrl(candidateProfileRequestDTO.getResumeUrl())
                 .skills(candidateProfileRequestDTO.getSkills())
                 .experienceYears(candidateProfileRequestDTO.getExperienceYears())
+                .location(candidateProfileRequestDTO.getLocation())
+                .expectedSalary(candidateProfileRequestDTO.getExpectedSalary())
                 .user(user)
                 .build();
 
@@ -113,6 +115,12 @@ public class CandidateProfileService {
                     break;
                 case "experienceYears":
                     candidateProfile.setExperienceYears(Integer.parseInt(value.toString()));
+                    break;
+                case "location":
+                    candidateProfile.setLocation(value.toString());
+                    break;
+                case "expectedSalary":
+                    candidateProfile.setExpectedSalary(Double.parseDouble(value.toString()));
                     break;
                 default:
                     throw new IllegalArgumentException("Invalid field: " + field);

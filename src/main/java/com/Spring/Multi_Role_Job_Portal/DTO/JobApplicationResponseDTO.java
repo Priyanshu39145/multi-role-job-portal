@@ -12,4 +12,5 @@ public class JobApplicationResponseDTO {
     private Long id;
     private String jobTitle;
     private StatusType status;
+    private Double matchScore;
 }

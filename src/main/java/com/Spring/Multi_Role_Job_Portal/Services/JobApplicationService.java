@@ -1,37 +1,64 @@
 package com.Spring.Multi_Role_Job_Portal.Services;
 
+import com.Spring.Multi_Role_Job_Portal.Config.ApplicationProperties;
+import com.Spring.Multi_Role_Job_Portal.DTO.ApplicationStatusHistoryResponseDTO;
 import com.Spring.Multi_Role_Job_Portal.DTO.JobApplicationResponseDTO;
 import com.Spring.Multi_Role_Job_Portal.Entities.*;
 import com.Spring.Multi_Role_Job_Portal.Entities.Type.JobStatus;
 import com.Spring.Multi_Role_Job_Portal.Entities.Type.RoleType;
 import com.Spring.Multi_Role_Job_Portal.Entities.Type.StatusType;
 import com.Spring.Multi_Role_Job_Portal.Repositories.CandidateProfileRepository;
+import com.Spring.Multi_Role_Job_Portal.Repositories.ApplicationStatusHistoryRepository;
 import com.Spring.Multi_Role_Job_Portal.Repositories.JobApplicationRepository;
 import com.Spring.Multi_Role_Job_Portal.Repositories.JobRepository;
 import com.Spring.Multi_Role_Job_Portal.Repositories.RecruiterProfileRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
-import org.modelmapper.ModelMapper;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.server.ResponseStatusException;
 
-//import java.nio.file.AccessDeniedException;
+import java.time.LocalDateTime;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class JobApplicationService {
 
+    private static final Map<StatusType, Set<StatusType>> VALID_TRANSITIONS = Map.of(
+            StatusType.APPLIED, EnumSet.of(StatusType.SUGGESTED, StatusType.SHORTLISTED, StatusType.REJECTED, StatusType.WITHDRAWN),
+            StatusType.SUGGESTED, EnumSet.of(StatusType.SHORTLISTED, StatusType.REJECTED, StatusType.WITHDRAWN),
+            StatusType.SHORTLISTED, EnumSet.of(StatusType.HIRED, StatusType.REJECTED, StatusType.WITHDRAWN),
+            StatusType.HIRED, EnumSet.noneOf(StatusType.class),
+            StatusType.REJECTED, EnumSet.noneOf(StatusType.class),
+            StatusType.WITHDRAWN, EnumSet.noneOf(StatusType.class)
+    );
+
+    private static final Set<StatusType> REAPPLICATION_BLOCKING_STATUSES = EnumSet.of(
+            StatusType.APPLIED,
+            StatusType.SUGGESTED,
+            StatusType.SHORTLISTED,
+            StatusType.HIRED,
+            StatusType.WITHDRAWN
+    );
+
     private final JobApplicationRepository jobApplicationRepository;
+    private final ApplicationStatusHistoryRepository applicationStatusHistoryRepository;
     private final CandidateProfileRepository candidateProfileRepository;
     private final JobRepository jobRepository;
     private final RecruiterProfileRepository recruiterProfileRepository;
-    private final ModelMapper modelMapper;
+    private final MatchingService matchingService;
+    private final ApplicationProperties applicationProperties;
 
+    @Transactional
     public JobApplicationResponseDTO applyToJobById(Long jobId) throws AccessDeniedException {
         User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         //Job is only applied by candidate
@@ -46,21 +73,40 @@ public class JobApplicationService {
             throw new IllegalStateException("This job is closed and no longer accepting applications");
         }
 
+        boolean hasBlockingApplication = jobApplicationRepository.existsByJobAndCandidateProfileAndStatusIn(
+                job,
+                candidateProfile,
+                REAPPLICATION_BLOCKING_STATUSES
+        );
+        if (hasBlockingApplication) {
+            throw new DataIntegrityViolationException("You have already applied to this job");
+        }
+
+        LocalDateTime cooldownStart = LocalDateTime.now()
+                .minusDays(applicationProperties.getRejectionCooldownDays());
+        boolean rejectedDuringCooldown = jobApplicationRepository
+                .existsByJobAndCandidateProfileAndStatusAndUpdatedAtAfter(
+                        job,
+                        candidateProfile,
+                        StatusType.REJECTED,
+                        cooldownStart
+                );
+        if (rejectedDuringCooldown) {
+            throw new IllegalStateException(
+                    "You can reapply " + applicationProperties.getRejectionCooldownDays()
+                            + " days after a rejected application"
+            );
+        }
+
         JobApplication jobApplication = JobApplication.builder()
                 .job(job)
                 .candidateProfile(candidateProfile)
-                .status(StatusType.APPLIED)
                 .build();
 
-        boolean alreadyApplied =
-                jobApplicationRepository.existsByJobAndCandidateProfile(job, candidateProfile);
-
-        if (alreadyApplied)
-            throw new DataIntegrityViolationException("You have already applied to this job");
-
         jobApplicationRepository.save(jobApplication);
+        transition(jobApplication, StatusType.APPLIED, user, "Application submitted");
 
-        return new JobApplicationResponseDTO(jobApplication.getId() , jobApplication.getJob().getTitle() , jobApplication.getStatus());
+        return toResponse(jobApplication);
 
     }
 
@@ -77,7 +123,7 @@ public class JobApplicationService {
         List<JobApplication> jobApplications = jobApplicationRepository.findAllByCandidateProfile(candidateProfile);
 
         return jobApplications.stream()
-                .map(jobApplication -> new JobApplicationResponseDTO(jobApplication.getId() , jobApplication.getJob().getTitle() , jobApplication.getStatus()))
+                .map(this::toResponse)
                 .toList();
     }
 
@@ -96,14 +142,14 @@ public class JobApplicationService {
         if (!job.getCreatedBy().getId().equals(recruiterProfile.getId()))
             throw new AccessDeniedException("You are not allowed to view applications for this job");
 
-        List<JobApplication> jobApplications = jobApplicationRepository.findAllByJob(job);
+        List<JobApplication> jobApplications = jobApplicationRepository.findAllByJobOrderByMatchScoreDesc(job);
 
         return jobApplications.stream()
-                .map(jobApplication -> new JobApplicationResponseDTO(jobApplication.getId() , jobApplication.getJob().getTitle() , jobApplication.getStatus()))
+                .map(this::toResponse)
                 .toList();
     }
 
-
+    @Transactional
     public JobApplicationResponseDTO shortList(Long applicationId) throws AccessDeniedException {
         User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         //Job is only checked by recruiter
@@ -121,40 +167,67 @@ public class JobApplicationService {
         if (!job.getCreatedBy().getId().equals(recruiterProfile.getId()))
             throw new AccessDeniedException("You are not allowed to view applications for this job");
 
-        if (jobApplication.getStatus() != StatusType.APPLIED)
-            throw new DataIntegrityViolationException("Application already processed");
-
         if (job.getStatus() == JobStatus.CLOSED) {
             throw new IllegalStateException("Cannot shortlist for closed job");
         }
 
-        Set<String> requiredSkills = job.getRequiredSkills();
-        Set<String> skills = candidateProfile.getSkills();
+        double matchScore = matchingService.computeMatchScore(job, candidateProfile);
+        jobApplication.setMatchScore(matchScore);
+        double minMatchScore = job.getMinMatchScore() == null ? 70.0 : job.getMinMatchScore();
+        transition(
+                jobApplication,
+                matchScore >= minMatchScore ? StatusType.SUGGESTED : StatusType.REJECTED,
+                user,
+                "Weighted match score: " + matchScore
+        );
 
-        if(requiredSkills.isEmpty() || skills.isEmpty())
-            throw new EntityNotFoundException("Skills not available");
+        return toResponse(jobApplication);
+    }
 
-        boolean flag = true;
-
-        for(String s : requiredSkills)  {
-            if(!skills.contains(s)) {
-                flag = false;
-                break;
-            }
+    /**
+     * Confirms a score-based suggestion after the recruiter has reviewed it.
+     */
+    @Transactional
+    public JobApplicationResponseDTO confirmShortlist(Long applicationId) throws AccessDeniedException {
+        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        if (user == null || user.getRole() != RoleType.RECRUITER) {
+            throw new AccessDeniedException("User is not valid to shortlist job applications");
         }
-        if(job.getExperienceRequired()>jobApplication.getCandidateProfile().getExperienceYears())
-            flag = false;
 
-        if(flag)    {
-            jobApplication.setStatus(StatusType.SHORTLISTED);
+        JobApplication jobApplication = jobApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new EntityNotFoundException("Job application not found"));
+        RecruiterProfile recruiterProfile = recruiterProfileRepository.findByUser(user)
+                .orElseThrow(() -> new EntityNotFoundException("Recruiter Profile not found"));
+
+        Job job = jobApplication.getJob();
+        if (!job.getCreatedBy().getId().equals(recruiterProfile.getId())) {
+            throw new AccessDeniedException("You are not allowed to shortlist this job application");
         }
-        else
-            jobApplication.setStatus(StatusType.REJECTED);
+        if (job.getStatus() == JobStatus.CLOSED) {
+            throw new IllegalStateException("Cannot shortlist for closed job");
+        }
+        transition(jobApplication, StatusType.SHORTLISTED, user, "Shortlist confirmed by recruiter");
+        return toResponse(jobApplication);
+    }
 
-        jobApplicationRepository.save(jobApplication);
+    @Transactional
+    public JobApplicationResponseDTO withdraw(Long applicationId) throws AccessDeniedException {
+        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        if (user == null || user.getRole() != RoleType.CANDIDATE) {
+            throw new AccessDeniedException("Only candidates can withdraw job applications");
+        }
 
-        return new JobApplicationResponseDTO(jobApplication.getId() , jobApplication.getJob().getTitle() , jobApplication.getStatus());
+        CandidateProfile candidateProfile = candidateProfileRepository.findByUser(user)
+                .orElseThrow(() -> new EntityNotFoundException("Candidate profile not found"));
+        JobApplication jobApplication = jobApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new EntityNotFoundException("Job application not found"));
 
+        if (!jobApplication.getCandidateProfile().getId().equals(candidateProfile.getId())) {
+            throw new AccessDeniedException("You are not allowed to withdraw this job application");
+        }
+
+        transition(jobApplication, StatusType.WITHDRAWN, user, "Application withdrawn by candidate");
+        return toResponse(jobApplication);
     }
 
     public List<JobApplicationResponseDTO> getAllShortListedApplications(Long jobId) throws AccessDeniedException {
@@ -174,7 +247,7 @@ public class JobApplicationService {
         List<JobApplication> jobApplications = jobApplicationRepository.findAllByJobAndStatus(job,StatusType.SHORTLISTED);
 
         return jobApplications.stream()
-                .map(jobApplication -> new JobApplicationResponseDTO(jobApplication.getId() , jobApplication.getJob().getTitle() , jobApplication.getStatus()))
+                .map(this::toResponse)
                 .toList();
 
     }
@@ -182,45 +255,132 @@ public class JobApplicationService {
 
     @Transactional
     public JobApplicationResponseDTO hireCandidate(Long applicationId) throws AccessDeniedException {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        try {
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
 
-        if (user.getRole() != RoleType.RECRUITER) {
-            throw new AccessDeniedException("Only recruiters can close jobs");
-        }
-
-        RecruiterProfile recruiterProfile = recruiterProfileRepository.findByUser(user)
-                .orElseThrow(() -> new IllegalArgumentException("Recruiter profile not found"));
-
-        JobApplication selected = jobApplicationRepository.findById(applicationId)
-                .orElseThrow(() -> new EntityNotFoundException("Application not found"));
-
-        Job job = selected.getJob();
-
-        //Checking if the recruiter of the job given to us and the user recruiter are the same
-        if (!job.getCreatedBy().getId().equals(recruiterProfile.getId()))
-            throw new AccessDeniedException("You are not allowed to view applications for this job");
-
-        if (job.getStatus() == JobStatus.CLOSED) {
-            throw new IllegalStateException("This job is already closed");
-        }
-
-        // 1️⃣ Hire selected candidate
-        selected.setStatus(StatusType.HIRED);
-
-        // 2️⃣ Reject all others
-        List<JobApplication> all = jobApplicationRepository.findByJob(job);
-        for (JobApplication app : all) {
-            if (!app.getId().equals(applicationId)) {
-                app.setStatus(StatusType.REJECTED);
+            if (user.getRole() != RoleType.RECRUITER) {
+                throw new AccessDeniedException("Only recruiters can close jobs");
             }
+
+            RecruiterProfile recruiterProfile = recruiterProfileRepository.findByUser(user)
+                    .orElseThrow(() -> new IllegalArgumentException("Recruiter profile not found"));
+
+            JobApplication selected = jobApplicationRepository.findById(applicationId)
+                    .orElseThrow(() -> new EntityNotFoundException("Application not found"));
+
+            Job job = selected.getJob();
+
+            //Checking if the recruiter of the job given to us and the user recruiter are the same
+            if (!job.getCreatedBy().getId().equals(recruiterProfile.getId()))
+                throw new AccessDeniedException("You are not allowed to view applications for this job");
+
+            if (job.getStatus() == JobStatus.CLOSED) {
+                throw new IllegalStateException("This job is already closed");
+            }
+
+            // 1️⃣ Hire selected candidate
+            transition(selected, StatusType.HIRED, user, "Candidate hired for this job");
+
+            // 2️⃣ Reject all others
+            List<JobApplication> all = jobApplicationRepository.findByJob(job);
+            for (JobApplication app : all) {
+                if (!app.getId().equals(applicationId) && !isTerminal(app.getStatus())) {
+                    transition(app, StatusType.REJECTED, user, "Another candidate was hired for this job");
+                }
+            }
+
+            // 3️⃣ Close the job
+            job.setStatus(JobStatus.CLOSED);
+
+            jobRepository.save(job);
+
+            return toResponse(selected);
+        }
+        catch (OptimisticLockingFailureException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT , "Job was modified by another request");
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<ApplicationStatusHistoryResponseDTO> getApplicationHistory(Long applicationId)
+            throws AccessDeniedException {
+        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        JobApplication jobApplication = jobApplicationRepository.findById(applicationId)
+                .orElseThrow(() -> new EntityNotFoundException("Job application not found"));
+
+        if (user == null || !canViewApplicationHistory(user, jobApplication)) {
+            throw new AccessDeniedException("You are not allowed to view this application history");
         }
 
-        // 3️⃣ Close the job
-        job.setStatus(JobStatus.CLOSED);
+        return applicationStatusHistoryRepository
+                .findAllByJobApplicationOrderByChangedAtAsc(jobApplication)
+                .stream()
+                .map(history -> ApplicationStatusHistoryResponseDTO.builder()
+                        .fromStatus(history.getFromStatus())
+                        .toStatus(history.getToStatus())
+                        .changedByEmail(history.getChangedBy().getEmail())
+                        .changedAt(history.getChangedAt())
+                        .note(history.getNote())
+                        .build())
+                .toList();
+    }
 
-        jobRepository.save(job);
-        jobApplicationRepository.saveAll(all);
+    /**
+     * The only path that changes an application's status. It also records the
+     * transition so the application and its audit history stay consistent.
+     */
+    private void transition(JobApplication application, StatusType newStatus, User actor, String note) {
+        StatusType currentStatus = application.getStatus();
+        boolean isInitialApplication = currentStatus == null && newStatus == StatusType.APPLIED;
+        boolean isAllowed = isInitialApplication || VALID_TRANSITIONS
+                .getOrDefault(currentStatus, Set.of())
+                .contains(newStatus);
 
-        return new JobApplicationResponseDTO(selected.getId() , selected.getJob().getTitle() , selected.getStatus());
+        if (!isAllowed) {
+            throw new IllegalStateException(
+                    "Invalid application status transition from " + currentStatus + " to " + newStatus
+            );
+        }
+
+        application.setStatus(newStatus);
+        jobApplicationRepository.save(application);
+
+        applicationStatusHistoryRepository.save(ApplicationStatusHistory.builder()
+                .jobApplication(application)
+                .fromStatus(currentStatus)
+                .toStatus(newStatus)
+                .changedBy(actor)
+                .changedAt(LocalDateTime.now())
+                .note(note)
+                .build());
+    }
+
+    private boolean canViewApplicationHistory(User user, JobApplication application) {
+        if (user.getRole() == RoleType.CANDIDATE) {
+            CandidateProfile profile = application.getCandidateProfile();
+            return profile.getUser().getId().equals(user.getId());
+        }
+
+        if (user.getRole() == RoleType.RECRUITER) {
+            RecruiterProfile recruiter = application.getJob().getCreatedBy();
+            return recruiter.getUser().getId().equals(user.getId());
+        }
+
+        return false;
+    }
+
+    private boolean isTerminal(StatusType status) {
+        return status == StatusType.HIRED
+                || status == StatusType.REJECTED
+                || status == StatusType.WITHDRAWN;
+    }
+
+    private JobApplicationResponseDTO toResponse(JobApplication jobApplication) {
+        return new JobApplicationResponseDTO(
+                jobApplication.getId(),
+                jobApplication.getJob().getTitle(),
+                jobApplication.getStatus(),
+                jobApplication.getMatchScore()
+        );
     }
 }

@@ -1,5 +1,6 @@
 package com.Spring.Multi_Role_Job_Portal.Controllers;
 
+import com.Spring.Multi_Role_Job_Portal.DTO.ApplicationStatusHistoryResponseDTO;
 import com.Spring.Multi_Role_Job_Portal.DTO.JobApplicationResponseDTO;
 import com.Spring.Multi_Role_Job_Portal.DTO.JobResponseDTO;
 import com.Spring.Multi_Role_Job_Portal.Services.JobApplicationService;
@@ -54,6 +55,27 @@ public class JobApplicationController {
     }
 
     @Operation(
+            summary = "Withdraw an application",
+            description = "Allows a candidate to withdraw their own active job application"
+    )
+    @PatchMapping("/candidate/applications/{applicationId}/withdraw")
+    public ResponseEntity<JobApplicationResponseDTO> withdraw(@PathVariable Long applicationId)
+            throws AccessDeniedException {
+        return ResponseEntity.ok(jobApplicationService.withdraw(applicationId));
+    }
+
+    @Operation(
+            summary = "Get application status history",
+            description = "Returns the audit trail for an application to its candidate or owning recruiter"
+    )
+    @GetMapping("/applications/{applicationId}/history")
+    public ResponseEntity<List<ApplicationStatusHistoryResponseDTO>> getApplicationHistory(
+            @PathVariable Long applicationId
+    ) throws AccessDeniedException {
+        return ResponseEntity.ok(jobApplicationService.getApplicationHistory(applicationId));
+    }
+
+    @Operation(
             summary = "Get applications for a job",
             description = "Allows a recruiter to view all applications for a job they posted"
     )
@@ -69,11 +91,11 @@ public class JobApplicationController {
     }
 
     @Operation(
-            summary = "Shortlist an application",
-            description = "Allows a recruiter to shortlist a candidate’s job application"
+            summary = "Score an application for shortlisting",
+            description = "Computes a weighted match score and suggests applications that meet the job's threshold for recruiter review"
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Application shortlisted successfully",
+            @ApiResponse(responseCode = "200", description = "Application scored successfully",
                     content = @Content(schema = @Schema(implementation = JobApplicationResponseDTO.class))),
             @ApiResponse(responseCode = "401", description = "User not authenticated"),
             @ApiResponse(responseCode = "403", description = "Only the recruiter who owns the job can shortlist"),
@@ -82,6 +104,15 @@ public class JobApplicationController {
     @PatchMapping("/applications/{applicationId}")
     public ResponseEntity<JobApplicationResponseDTO> shortList(@PathVariable Long applicationId) throws AccessDeniedException {
         return ResponseEntity.status(HttpStatus.OK).body(jobApplicationService.shortList(applicationId));
+    }
+
+    @Operation(
+            summary = "Confirm a suggested application",
+            description = "Allows the recruiter who owns the job to manually confirm a suggested application as shortlisted"
+    )
+    @PatchMapping("/applications/{applicationId}/confirm-shortlist")
+    public ResponseEntity<JobApplicationResponseDTO> confirmShortlist(@PathVariable Long applicationId) throws AccessDeniedException {
+        return ResponseEntity.ok(jobApplicationService.confirmShortlist(applicationId));
     }
 
     @Operation(

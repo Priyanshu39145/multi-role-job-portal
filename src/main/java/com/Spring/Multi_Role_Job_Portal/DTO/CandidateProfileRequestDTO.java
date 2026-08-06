@@ -20,4 +20,6 @@ public class CandidateProfileRequestDTO {
 
     private Set<String> skills;
     private Integer experienceYears;
+    private String location;
+    private Double expectedSalary;
 }

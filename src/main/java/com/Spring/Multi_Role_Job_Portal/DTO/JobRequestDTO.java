@@ -2,6 +2,8 @@ package com.Spring.Multi_Role_Job_Portal.DTO;
 
 import com.Spring.Multi_Role_Job_Portal.Entities.Type.EmploymentType;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -27,5 +29,9 @@ public class JobRequestDTO {
     private Double expectedSalary;
     @NotBlank
     private EmploymentType employmentType;
+
+    @DecimalMin(value = "0.0", message = "Minimum match score must be between 0 and 100")
+    @DecimalMax(value = "100.0", message = "Minimum match score must be between 0 and 100")
+    private Double minMatchScore;
 
 }

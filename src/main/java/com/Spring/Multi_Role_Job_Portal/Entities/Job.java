@@ -32,6 +32,10 @@ public class Job {
     private String location;
     private Double expectedSalary;
 
+    @Builder.Default
+    @Column(nullable = false, columnDefinition = "DOUBLE DEFAULT 70.0")
+    private Double minMatchScore = 70.0;
+
     //Many Jobs can be of a single company
     @ManyToOne(fetch = FetchType.EAGER)
     private Company company;
@@ -49,6 +53,9 @@ public class Job {
 
     @OneToMany(mappedBy = "job")
     private List<JobApplication> jobApplicationList;
+
+    @Version
+    private Long version;
 
     @CreationTimestamp
     private LocalDateTime createdAt;

@@ -1,0 +1,67 @@
+First Change -----
+Your User class implements Spring Security’s UserDetails, which means Spring uses the methods defined in the UserDetails interface (such as getUsername(), getPassword(), getAuthorities(), isEnabled(), etc.) to decide whether a user can authenticate. Although your User entity has an enabled field, Spring Security never reads this field directly—it only calls the isEnabled() method. Since your class does not override isEnabled(), Spring uses the interface’s default implementation, which always returns true, so even users with enabled = false are treated as enabled, allowed to log in, and can receive a valid JWT. This makes the enabled field effectively unused (“dead code”). The fix is to override isEnabled() and return Boolean.TRUE.equals(enabled), ensuring Spring Security checks the actual database value. Using Boolean.TRUE.equals(enabled) is safer than returning enabled directly because the field is a Boolean object that can be null; this expression safely returns false for both false and null without throwing a NullPointerException.
+
+-----------------------------------------------------------------------------------------------------------------------------
+
+Second change ----
+
+The issue was that methods like closeJob() and hireCandidate() first read a Job with status OPEN, perform some checks, and then update it. If two requests arrive at nearly the same time (for example, a recruiter double-clicks the Hire button or two requests are sent concurrently), both can read the job as OPEN before either one commits, causing both operations to proceed and potentially overwrite each other’s changes. To prevent this race condition, a @Version field was added to the Job entity, enabling JPA’s optimistic locking. Hibernate automatically increments this version whenever the Job is updated and, during an update, verifies that the version in the database still matches the one originally read. If another transaction has already modified the job, Hibernate throws an OptimisticLockingFailureException instead of silently overwriting the newer data. The closeJob() and hireCandidate() methods were also annotated with @Transactional and updated to catch this exception, returning an HTTP 409 Conflict response to indicate that the job was modified by another request and the client should refresh and retry.
+
+----------------------------------------------------------------------------------------------------------------------------
+
+Third Change ---- We remove the old approach of directly shortlisting if a candidate has all skills ---- to this ----
+
+Candidate applies
+        │
+        ▼
+MatchingService
+        │
+        ▼
+Calculate match score (0–100)
+        │
+        ▼
+Save score in JobApplication
+        │
+        ▼
+Compare with Job.minMatchScore
+        │
+        ▼
+   Score ≥ Threshold?
+    │               │
+   Yes             No
+    │               │
+    ▼               ▼
+SUGGESTED      REJECTED
+    │
+    ▼
+Recruiter reviews ranked candidates
+    │
+    ▼
+Confirm Shortlist
+    │
+    ▼
+SHORTLISTED
+
+Previously, the job portal used a very simple matching system. When a recruiter clicked Shortlist, the application checked whether the candidate had every required skill. If even one required skill was missing, the candidate was immediately rejected, regardless of how good they were in every other aspect. There was no scoring, no ranking, and no flexibility. Candidates were treated as either a complete match or not a match at all.
+
+The new system replaces this binary approach with a weighted match scoring system, making the application behave more like a real Applicant Tracking System (ATS). Instead of asking “Does the candidate satisfy everything?”, it asks “How well does this candidate match the job?” A new MatchingService is responsible for calculating a score out of 100 based on four factors: skills (60 points), experience (25 points), location (10 points), and salary expectation (5 points). Skills contribute the most because they are usually the most important factor, while experience, location, and salary provide additional context. If a candidate hasn’t provided optional information like location or salary, the system simply gives 0 points for those criteria instead of failing the calculation.
+
+To support this, the data model was extended. The CandidateProfile now stores location and expectedSalary, allowing those criteria to be included in the score. The Job entity now stores a minMatchScore, which is the minimum score a recruiter expects from candidates (defaulting to 70 but configurable when creating or updating a job). The JobApplication entity now stores a matchScore, so every application permanently records the calculated compatibility score.
+
+The shortlisting workflow also changed significantly. Earlier, clicking Shortlist immediately changed the application status to SHORTLISTED or REJECTED. Now, the system first calculates and stores the candidate’s score. If the score meets or exceeds the job’s minMatchScore, the application is marked as SUGGESTED instead of being automatically shortlisted. This means the system only recommends candidates—it does not make the final hiring decision. The recruiter then reviews the suggested candidates and explicitly confirms them through a new Confirm Shortlist action, which changes the status from SUGGESTED to SHORTLISTED. This keeps a human in control of the hiring process and avoids fully automated hiring decisions.
+
+Recruiters also get a much better experience when reviewing applications. Instead of seeing candidates in the order they applied, applications are now fetched using findAllByJobOrderByMatchScoreDesc(...), so the highest-scoring candidates appear first. API responses were updated to include the new fields (matchScore, minMatchScore, location, and expectedSalary), validation was added for minMatchScore to ensure it stays between 0 and 100, and a dedicated MatchingServiceTest verifies that the scoring algorithm works correctly for complete matches, partial matches, and cases where optional profile data is missing.
+
+In short, the system evolved from a strict rule-based filter into a score-based recommendation engine. Instead of rejecting candidates because they miss one skill, it evaluates them across multiple factors, assigns a compatibility score, ranks all applicants from best to worst, suggests the strongest candidates to recruiters, and leaves the final shortlisting decision to a human. This makes the platform much closer to how modern recruitment systems work while keeping the code cleaner by separating the matching logic into its own dedicated service.
+
+----------------------------------------------------------------------------------------------------------------------------
+
+Fourth Change
+
+This update completely reorganized how job application statuses are managed. Earlier, different methods like shortList(), confirmShortlist(), and hireCandidate() directly changed the application status using their own if conditions. This meant the rules were scattered across the code and could easily become inconsistent. Now, all status changes go through a single transition() method, which acts as the application’s state machine. It checks whether a status change is valid (for example, APPLIED → SUGGESTED is allowed, but APPLIED → HIRED is not). If the transition is invalid, it throws an exception instead of allowing an incorrect status change.
+
+Another major improvement is the audit history. Every time an application’s status changes, a new ApplicationStatusHistory record is created. This stores the previous status, the new status, who made the change, when it happened, and an optional note explaining why. Even the very first action, when a candidate submits an application (null → APPLIED), is recorded. A new API was also added so that the candidate or the recruiter who owns the job can view the complete history of an application.
+
+The system also introduced a candidate withdrawal feature. A new WITHDRAWN status was added, allowing candidates to withdraw their own applications through a dedicated endpoint. Withdrawal is treated just like any other status change, so it also passes through the state machine and is recorded in the audit history. This keeps the application’s lifecycle consistent and ensures every action is traceable.
+
+Finally, the reapplication process was improved. Earlier, a database uniqueness constraint permanently prevented a candidate from applying to the same job more than once, making a rejection cooldown impossible. That constraint was removed and replaced with business logic. Now, candidates cannot reapply while they have an active application or if they were rejected within a configurable cooldown period (default 30 days). After the cooldown expires, they can apply again. The cooldown duration is configurable through application.properties, making it easy to change without modifying the code. Overall, these changes make the application workflow more structured, maintainable, and closer to how real-world Applicant Tracking Systems (ATS) work.

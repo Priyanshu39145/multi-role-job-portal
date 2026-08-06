@@ -15,17 +15,22 @@ import com.Spring.Multi_Role_Job_Portal.Repositories.JobRepository;
 import com.Spring.Multi_Role_Job_Portal.Repositories.RecruiterProfileRepository;
 import com.Spring.Multi_Role_Job_Portal.Specifications.JobSpecification;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.Transient;
 import lombok.RequiredArgsConstructor;
 import org.modelmapper.ModelMapper;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.HashSet;
 import java.util.List;
@@ -59,6 +64,7 @@ public class JobService {
                 .experienceRequired(jobRequestDTO.getExperienceRequired())
                 .location(jobRequestDTO.getLocation())
                 .expectedSalary(jobRequestDTO.getExpectedSalary())
+                .minMatchScore(jobRequestDTO.getMinMatchScore() == null ? 70.0 : jobRequestDTO.getMinMatchScore())
                 .company(recruiterProfile.getCompany())
                 .createdBy(recruiterProfile)
                 .employmentType(jobRequestDTO.getEmploymentType())
@@ -75,6 +81,7 @@ public class JobService {
                 .location(job.getLocation())
                 .experienceRequired(job.getExperienceRequired())
                 .expectedSalary(job.getExpectedSalary())
+                .minMatchScore(job.getMinMatchScore())
                 .employmentType(job.getEmploymentType())
                 .status(job.getStatus())
                 .build();
@@ -96,6 +103,7 @@ public class JobService {
                         .location(job.getLocation())
                         .experienceRequired(job.getExperienceRequired())
                         .expectedSalary(job.getExpectedSalary())
+                        .minMatchScore(job.getMinMatchScore())
                         .employmentType(job.getEmploymentType())
                         .status(job.getStatus())
                         .build())
@@ -117,6 +125,7 @@ public class JobService {
                 .location(job.getLocation())
                 .experienceRequired(job.getExperienceRequired())
                 .expectedSalary(job.getExpectedSalary())
+                .minMatchScore(job.getMinMatchScore())
                 .employmentType(job.getEmploymentType())
                 .status(job.getStatus())
                 .build();
@@ -176,6 +185,14 @@ public class JobService {
                     job.setExpectedSalary(Double.parseDouble(value.toString()));
                     break;
 
+                case "minMatchScore":
+                    double minMatchScore = Double.parseDouble(value.toString());
+                    if (minMatchScore < 0.0 || minMatchScore > 100.0) {
+                        throw new IllegalArgumentException("Minimum match score must be between 0 and 100");
+                    }
+                    job.setMinMatchScore(minMatchScore);
+                    break;
+
                 default:
                     throw new IllegalArgumentException("Invalid field for job update");
             }
@@ -192,6 +209,7 @@ public class JobService {
                 .location(job.getLocation())
                 .experienceRequired(job.getExperienceRequired())
                 .expectedSalary(job.getExpectedSalary())
+                .minMatchScore(job.getMinMatchScore())
                 .employmentType(job.getEmploymentType())
                 .status(job.getStatus())
                 .build();
@@ -249,7 +267,8 @@ public class JobService {
                 .and(JobSpecification.hasEmploymentType(employmentType))
                 .and(JobSpecification.hasCompany(companyName))
                 .and(JobSpecification.minExpectedSalary(minSalary))
-                .and(JobSpecification.hasRequiredSkill(skill));
+                .and(JobSpecification.hasRequiredSkill(skill))
+                .and(JobSpecification.isOpen());
 
         //We here execute the final query with the specifications ---
 
@@ -261,7 +280,7 @@ public class JobService {
 
         Page<Job> jobs = jobRepository.findAll(
                 spec,
-                PageRequest.of(page, size, sort)
+                pageable
         );
 
         return jobs
@@ -274,49 +293,57 @@ public class JobService {
                         .location(job.getLocation())
                         .experienceRequired(job.getExperienceRequired())
                         .expectedSalary(job.getExpectedSalary())
+                        .minMatchScore(job.getMinMatchScore())
                         .employmentType(job.getEmploymentType())
                         .status(job.getStatus())
                         .build());
 
     }
 
+    @Transactional
     public JobResponseDTO closeJob(Long jobId) throws AccessDeniedException {
-        User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
 
-        if (user.getRole() != RoleType.RECRUITER) {
-            throw new AccessDeniedException("Only recruiters can close jobs");
+        try {
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+
+            if (user.getRole() != RoleType.RECRUITER) {
+                throw new AccessDeniedException("Only recruiters can close jobs");
+            }
+
+            RecruiterProfile recruiter = recruiterProfileRepository.findByUser(user)
+                    .orElseThrow(() -> new IllegalArgumentException("Recruiter profile not found"));
+
+            Job job = jobRepository.findById(jobId)
+                    .orElseThrow(() -> new IllegalArgumentException("Job not found"));
+
+            if (!job.getCreatedBy().getId().equals(recruiter.getId())) {
+                throw new AccessDeniedException("You do not own this job");
+            }
+            if (job.getStatus() == JobStatus.CLOSED) {
+                throw new IllegalStateException("Job is already closed");
+            }
+            job.setStatus(JobStatus.CLOSED);
+            jobRepository.save(job);
+
+            JobResponseDTO jobResponseDTO = JobResponseDTO.builder()
+                    .id(job.getId())
+                    .title(job.getTitle())
+                    .description(job.getDescription())
+                    .requiredSkills(job.getRequiredSkills())
+                    .companyName(job.getCompany().getName())
+                    .location(job.getLocation())
+                    .experienceRequired(job.getExperienceRequired())
+                    .expectedSalary(job.getExpectedSalary())
+                    .minMatchScore(job.getMinMatchScore())
+                    .employmentType(job.getEmploymentType())
+                    .status(job.getStatus())
+                    .build();
+
+            return jobResponseDTO;
+        }
+        catch (OptimisticLockingFailureException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT , "Job was modified by another request");
         }
 
-        RecruiterProfile recruiter = recruiterProfileRepository.findByUser(user)
-                .orElseThrow(() -> new IllegalArgumentException("Recruiter profile not found"));
-
-        Job job = jobRepository.findById(jobId)
-                .orElseThrow(() -> new IllegalArgumentException("Job not found"));
-
-        if (!job.getCreatedBy().getId().equals(recruiter.getId())) {
-            throw new AccessDeniedException("You do not own this job");
-        }
-
-        if (job.getStatus() == JobStatus.CLOSED) {
-            throw new IllegalStateException("Job is already closed");
-        }
-
-        job.setStatus(JobStatus.CLOSED);
-        jobRepository.save(job);
-
-        JobResponseDTO jobResponseDTO = JobResponseDTO.builder()
-                .id(job.getId())
-                .title(job.getTitle())
-                .description(job.getDescription())
-                .requiredSkills(job.getRequiredSkills())
-                .companyName(job.getCompany().getName())
-                .location(job.getLocation())
-                .experienceRequired(job.getExperienceRequired())
-                .expectedSalary(job.getExpectedSalary())
-                .employmentType(job.getEmploymentType())
-                .status(job.getStatus())
-                .build();
-
-        return jobResponseDTO;
     }
 }

@@ -33,6 +33,10 @@ public class CandidateProfile {
 
     private Integer experienceYears;
 
+    private String location;
+
+    private Double expectedSalary;
+
     //MapsId --- will make the userId the primary Key ---
     @OneToOne
 //    @MapsId
